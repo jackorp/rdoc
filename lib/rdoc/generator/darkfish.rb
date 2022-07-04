@@ -176,6 +176,19 @@ class RDoc::Generator::Darkfish
     @json_index = RDoc::Generator::JsonIndex.new self, options
   end
 
+  # Option parser to make darkfish a bit more configurable
+  def self.setup_options rdoc_options
+    op = rdoc_options.option_parser
+
+    op.on("--css-stylesheet-path PATH", String) do |path|
+      rdoc_options.css_stylesheet_path = path
+    end
+
+    op.on("--js-file-path PATH", String) do |path|
+      rdoc_options.js_file_path = path
+    end
+  end
+
   ##
   # Output progress information if debugging is enabled
 
@@ -216,22 +229,45 @@ class RDoc::Generator::Darkfish
     debug_msg "Copying static files"
     options = { :verbose => $DEBUG_RDOC, :noop => @dry_run }
 
-    BUILTIN_STYLE_ITEMS.each do |item|
-      install_rdoc_static_file @template_dir + item, "./#{item}", options
+    # The path is a template to be filled during RPM build
+    # since the files moved to a directory under a directory (%{_webassetdir}) that expands through RPM,
+    # this way we can substitute it with proper value.
+    static_file_paths = ['css', 'images'].map { |path| "<_webassetdir>/" + path}.map { |path| Pathname.new(path) }
+    # Empty value to keep form consistent with static_file_paths (and thus open for additions)
+    javascript_paths = ['js'].map { |path| "<_jsdir>/" + path }.map { |path| Pathname.new(path) }
+
+    paths = static_file_paths + javascript_paths
+
+    paths.each do |path|
+      install_rdoc_static_file path, "./#{File.basename path}", options
     end
 
+    # BUILTIN_STYLE_ITEMS
+    #   .map { |filename| File.dirname filename }
+    #   .uniq
+    #   .reject { |a| a =~ /.*darkfish$/ }
+    #   .each do |item|
+    #   install_rdoc_static_file @template_dir + item, "./#{item}", options
+    # end
+    #
+
+    # Leave the option untouched.
     unless @options.template_stylesheets.empty?
       FileUtils.cp @options.template_stylesheets, '.', **options
     end
-
-    Dir[(@template_dir + "{js,images}/**/*").to_s].each do |path|
-      next if File.directory? path
-      next if File.basename(path) =~ /^\./
-
-      dst = Pathname.new(path).relative_path_from @template_dir
-
-      install_rdoc_static_file @template_dir + path, dst, options
-    end
+    #
+    # Dir[(@template_dir + "{js,images}/**/*").to_s]
+    #   .map { |filename| File.dirname filename }
+    #   .uniq
+    #   .reject { |a| a =~ /.*darkfish$/ }
+    #   .each do |path|
+    #     # next if File.directory? path
+    #     next if File.basename(path) =~ /^\./
+    #
+    #     # dst = Pathname.new(path).relative_path_from @template_dir
+    #
+    #     install_rdoc_static_file @template_dir + path, "./#{File.basename(path)}", options
+    #   end
   end
 
   ##
@@ -314,6 +350,8 @@ class RDoc::Generator::Darkfish
     search_index_rel_prefix += @asset_rel_path if @file_output
 
     asset_rel_prefix = rel_prefix + @asset_rel_path
+    css_stylesheet_prefix = @options.css_stylesheet_path || asset_rel_prefix
+    js_file_prefix = @options.js_file_path || asset_rel_prefix
 
     @title = @options.title
 
@@ -348,6 +386,8 @@ class RDoc::Generator::Darkfish
     search_index_rel_prefix += @asset_rel_path if @file_output
 
     asset_rel_prefix = rel_prefix + @asset_rel_path
+    js_file_prefix = @options.js_file_path || asset_rel_path
+    css_stylesheet_prefix = @options.css_stylesheet_path || asset_rel_path
     svninfo          = get_svninfo(current)
 
     @title = "#{klass.type} #{klass.full_name} - #{@options.title}"
@@ -474,6 +514,8 @@ class RDoc::Generator::Darkfish
 
     current          = file
     asset_rel_prefix = rel_prefix + @asset_rel_path
+    js_file_prefix = @options.js_file_path || asset_rel_path
+    css_stylesheet_prefix = @options.css_stylesheet_path || asset_rel_path
 
     @title = "#{file.page_name} - #{@options.title}"
 
@@ -564,6 +606,8 @@ class RDoc::Generator::Darkfish
     search_index_rel_prefix += @asset_rel_path if @file_output
 
     asset_rel_prefix = rel_prefix + @asset_rel_path
+    js_file_prefix = @options.js_file_path || asset_rel_path
+    css_stylesheet_prefix = @options.css_stylesheet_path || asset_rel_path
 
     @title = "Table of Contents - #{@options.title}"
 
@@ -584,6 +628,14 @@ class RDoc::Generator::Darkfish
   def install_rdoc_static_file source, destination, options # :nodoc:
     return unless source.exist?
 
+    if ENV['RPMBUILD']
+      install_static_files_fedora_doc source, destination, options
+    else
+      install_static_files_default source, destination, options
+    end
+  end
+
+  def install_static_files_default source, destination, options
     begin
       FileUtils.mkdir_p File.dirname(destination), **options
 
@@ -597,6 +649,24 @@ class RDoc::Generator::Darkfish
       FileUtils.cp source, destination, **options
     end
   end
+
+  def install_static_files_fedora_doc source, destination, options
+    begin
+      FileUtils.ln_s source, File.dirname(destination), **options
+    rescue Errno::EEXIST
+      FileUtils.rm_f destination, **options
+      retry
+    rescue => e
+      $stderr.puts "Could not create a symlink to assets."
+      raise e
+    end
+  end
+
+  # def install_rdoc_static_file source, destination, options
+  #   return unless source.exist?
+  #
+  #   begin FileUtils.mkdir_p 
+  # end
 
   ##
   # Prepares for generation of output from the current directory
@@ -787,4 +857,9 @@ class RDoc::Generator::Darkfish
     template
   end
 
+end
+
+class RDoc::Options
+  attr_accessor :css_stylesheet_path
+  attr_accessor :js_file_path
 end
